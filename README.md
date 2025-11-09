@@ -12,7 +12,7 @@
 
 1] Clone the repository
 
-       git clone https://github.com/<your-username>/flam-performance-dashboard.git
+       git clone https://github.com/Raj-dina005/Performance-Critical-Data-Visualization-Dashboard
        cd flam-performance-dashboard
 
 
@@ -31,13 +31,14 @@
          http://localhost:3000
 
 ## Live Demo
-         https://flam-performance-dashboard.vercel.app
+         https://performance-critical-data-visualiza-two.vercel.app/
 
 ## Manual OffscreenCanvas Setup
        
 1] Open your dashboard:
 
-         https://flam-performance-dashboard.vercel.app
+                  https://performance-critical-data-visualiza-two.vercel.app/
+         
 
 
 2] Press F12 → open Console tab.
