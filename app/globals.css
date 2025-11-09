@@ -1,15 +1,124 @@
-/* app/globals.css */
+/* app/globals.css
+   Merged Tailwind directives + your existing theme variables + dashboard defaults
+*/
+
+/* --- Tailwind base/components/utilities --- */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* --- Keep original variable/theme logic, adapted for Tailwind usage --- */
 :root {
-  --bg-surface: #ffffff;
-  --foreground: #111827;
+  --background: #ffffff;
+  --foreground: #171717;
+
+  /* dashboard-friendly vars */
+  --bg-surface: #f8fafc;
+  --card-bg: #ffffff;
+  --muted: #64748b;
+  --accent: #6366f1; /* indigo-500 */
+  --card-radius: 12px;
+  --shadow-sm: 0 1px 3px rgba(2,6,23,0.06);
 }
 
+/* dark mode overrides */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+
+    --bg-surface: #071022;
+    --card-bg: #0b1220;
+    --muted: #94a3b8;
+    --accent: #60a5fa; /* light blue for dark bg */
+    --shadow-sm: 0 6px 20px rgba(0,0,0,0.6);
+  }
+}
+
+/* optional theme helpers (small inline theme block you had) */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", "Courier New", monospace;
+}
+
+/* base body styles */
 html, body, #__next {
   height: 100%;
-  margin: 0;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
-  background: var(--bg-surface);
+  background-color: var(--background);
   color: var(--foreground);
+  font-family: var(--font-sans);
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-.card { border-radius: 8px; }
+/* helpful utility defaults for dashboard */
+main {
+  min-height: 100vh;
+  background-color: var(--bg-surface);
+}
+
+/* card style used across the dashboard */
+.card {
+  background: var(--card-bg);
+  border-radius: var(--card-radius);
+  box-shadow: var(--shadow-sm);
+  padding: 0.75rem;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.02);
+}
+
+/* small headings */
+.h2 {
+  font-size: 0.875rem;
+  color: var(--foreground);
+  margin-bottom: 0.5rem;
+}
+
+/* performance overlay default */
+.perf-overlay {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 9999;
+  background: rgba(0,0,0,0.6);
+  color: white;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  backdrop-filter: blur(6px);
+}
+
+/* ensure canvases render crisply and don't produce flicker */
+canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  image-rendering: optimizeQuality;
+  -webkit-font-smoothing: antialiased;
+  -webkit-transform: translateZ(0); /* promote to own layer */
+}
+
+/* scrollbar tweaks for desktop */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(99,102,241,0.7), rgba(96,165,250,0.7));
+  border-radius: 999px;
+}
+/* small responsive tweaks */
+@media (max-width: 640px) {
+  .card { padding: 0.5rem; border-radius: 10px; }
+  .h2 { font-size: 0.825rem; }
+}
+
+/* small utility helpers you may use in components (prefixed to avoid Tailwind collision) */
+.u-center { display: flex; align-items: center; justify-content: center; }
+.u-muted { color: var(--muted); }
+
+/* End of globals.css */

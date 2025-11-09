@@ -1,122 +1,69 @@
 // components/charts/LineChart.tsx
 'use client';
-
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import type { DataPoint } from '../../lib/types';
 
-type Props = {
-  data: DataPoint[];
-  width?: number;
-  height?: number;
-  color?: string;
-};
+type Props = { data: DataPoint[]; width?: number; height?: number; className?: string };
 
-export default function LineChart({ data, width = 700, height = 260, color = '#3b82f6' }: Props) {
+export default function LineChart({ data, width = 780, height = 260, className }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const rafRef = useRef<number | null>(null);
-  const dataRef = useRef<DataPoint[]>([]);
-  dataRef.current = data || [];
+  const lastDraw = useRef(0);
+
+  const processed = useMemo(() => {
+    const w = Math.max(1, Math.floor(width));
+    const step = Math.max(1, Math.floor(data.length / w));
+    const out: DataPoint[] = [];
+    for (let i = 0; i < data.length; i += step) out.push(data[i]);
+    return out;
+  }, [data, width]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctxRef.current = ctx;
-
-    // DPR scaling
-    const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-    const cw = Math.max(1, Math.floor((canvas.clientWidth || width) * dpr));
-    const ch = Math.max(1, Math.floor((canvas.clientHeight || height) * dpr));
-    canvas.width = cw;
-    canvas.height = ch;
-    canvas.style.width = `${canvas.clientWidth || width}px`;
-    canvas.style.height = `${canvas.clientHeight || height}px`;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    ctx.lineWidth = 1.6;
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-
-    let running = true;
+    const DPR = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+    canvas.width = Math.floor(width * DPR);
+    canvas.height = Math.floor(height * DPR);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 
     function draw() {
-      const c = canvasRef.current;
-      const ctxNow = ctxRef.current;
-      if (!running || !c || !ctxNow) {
-        if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-        return;
-      }
-
-      const w = c.clientWidth || width;
-      const h = c.clientHeight || height;
-      ctxNow.clearRect(0, 0, w, h);
-
-      const pts = dataRef.current || [];
-      if (!pts.length) {
-        // placeholder grid if no data
-        ctxNow.beginPath();
-        ctxNow.strokeStyle = '#f3f3f3';
-        for (let x = 0; x < w; x += Math.max(40, w / 10)) {
-          ctxNow.moveTo(x, 0); ctxNow.lineTo(x, h);
-        }
-        ctxNow.stroke();
+      const now = performance.now();
+      if (now - lastDraw.current < 16) {
         rafRef.current = requestAnimationFrame(draw);
         return;
       }
+      lastDraw.current = now;
 
-      // compute range
+      ctx.clearRect(0, 0, width, height);
+      if (processed.length === 0) { rafRef.current = requestAnimationFrame(draw); return; }
+
       let minV = Infinity, maxV = -Infinity;
-      for (let i = 0; i < pts.length; i++) {
-        const v = pts[i].value;
-        if (v < minV) minV = v;
-        if (v > maxV) maxV = v;
-      }
-      if (minV === maxV) maxV = minV + 1;
-      if (!isFinite(minV) || !isFinite(maxV)) { minV = -1; maxV = 1; }
-      const range = maxV - minV;
+      for (const p of processed) { if (p.v < minV) minV = p.v; if (p.v > maxV) maxV = p.v; }
+      const pad = (maxV - minV) * 0.1 || 1;
+      minV -= pad; maxV += pad;
 
-      const len = pts.length;
-      const stepX = Math.max(1, w / Math.max(1, len - 1));
-
-      ctxNow.beginPath();
-      ctxNow.strokeStyle = color;
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = '#60a5fa';
+      ctx.beginPath();
+      const len = processed.length;
       for (let i = 0; i < len; i++) {
-        const p = pts[i];
-        const x = i * stepX;
-        const y = h - ((p.value - minV) / range) * h;
-        if (i === 0) ctxNow.moveTo(x, y); else ctxNow.lineTo(x, y);
+        const p = processed[i];
+        const x = (i / (len - 1 || 1)) * width;
+        const y = height - ((p.v - minV) / (maxV - minV || 1)) * height;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
-      ctxNow.stroke();
-
-      // draw last dot
-      const last = pts[len - 1];
-      const lx = (len - 1) * stepX;
-      const ly = h - ((last.value - minV) / range) * h;
-      ctxNow.beginPath();
-      ctxNow.arc(lx, ly, 2.6, 0, Math.PI * 2);
-      ctxNow.fill();
+      ctx.stroke();
 
       rafRef.current = requestAnimationFrame(draw);
     }
 
-    if (!rafRef.current) rafRef.current = requestAnimationFrame(draw);
+    rafRef.current = requestAnimationFrame(draw);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, [processed, width, height]);
 
-    return () => {
-      running = false;
-      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-      ctxRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [width, height, color]);
-
-  return (
-    <div style={{ width: '100%', minHeight: `${height}px` }}>
-      <canvas ref={canvasRef} style={{ width: '100%', height: `${height}px`, display: 'block' }} />
-    </div>
-  );
+  return <canvas ref={canvasRef} className={className} role="img" aria-label="Line chart" />;
 }

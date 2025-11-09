@@ -1,7 +1,3 @@
 // lib/types.ts
-export type DataPoint = {
-  timestamp: number; // ms since epoch
-  value: number;
-  category?: string;
-  metadata?: Record<string, any>;
-};
+export type DataPoint = { t: number; v: number; id?: number; category?: string };
+export type ChartType = 'line' | 'bar' | 'scatter' | 'heatmap';

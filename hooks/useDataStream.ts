@@ -1,82 +1,153 @@
 // hooks/useDataStream.ts
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { startGenerator } from '../lib/dataGenerator';
 import type { DataPoint } from '../lib/types';
-import { generateBatch } from '../lib/dataGenerator';
 
-type Options = {
-  rateMs?: number;    // interval between batches
-  batchSize?: number; // points per batch
-  running?: boolean;
-};
+type Options = { rateMs?: number; batchSize?: number; running?: boolean; useWorker?: boolean };
 
-export function useDataStream(initial: Options = {}) {
-  const [data, setData] = useState<DataPoint[]>([]);
-  const optionsRef = useRef<Required<Options>>({
-    rateMs: initial.rateMs ?? 100,
-    batchSize: initial.batchSize ?? 20,
-    running: initial.running ?? false,
-  });
-  const timerRef = useRef<number | null>(null);
+export function useDataStream(initial: Options = { rateMs: 100, batchSize: 20, running: true, useWorker: false }) {
+  const [snapshot, setSnapshot] = useState<DataPoint[]>([]);
+  const optsRef = useRef({ rateMs: 100, batchSize: 20, running: true, useWorker: false, ...initial });
+  const stopRef = useRef<(() => void) | null>(null);
+  const workerRef = useRef<Worker | null>(null);
 
-  function emitBatch() {
-    const now = Date.now();
-    const batch = generateBatch(now, optionsRef.current.batchSize);
-    // append, but keep memory bounded (sliding window)
-    setData((prev) => {
-      const merged = prev.concat(batch);
-      const maxPoints = 200000; // very large cap; adjust as needed
-      if (merged.length > maxPoints) return merged.slice(merged.length - maxPoints);
-      return merged;
-    });
-  }
-
-  function start() {
-    optionsRef.current.running = true;
-    if (timerRef.current == null) {
-      timerRef.current = window.setInterval(emitBatch, optionsRef.current.rateMs);
+  // internal: start worker-based generator
+  const startWorker = useCallback(() => {
+    if (workerRef.current) {
+      // already started
+      workerRef.current.postMessage({ type: 'start' });
+      return;
     }
-  }
-
-  function stop() {
-    optionsRef.current.running = false;
-    if (timerRef.current != null) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
+    try {
+      const w = new Worker('/data-worker.js');
+      w.onmessage = (ev) => {
+        const msg = ev.data || {};
+        if (msg.type === 'snapshot') {
+          setSnapshot(msg.data || []);
+        }
+      };
+      workerRef.current = w;
+      // apply current options and start
+      workerRef.current.postMessage({ type: 'setOptions', rateMs: optsRef.current.rateMs, batchSize: optsRef.current.batchSize });
+      workerRef.current.postMessage({ type: 'start' });
+      stopRef.current = () => {
+        try { workerRef.current?.postMessage({ type: 'stop' }); } catch (e) {}
+      };
+    } catch (e) {
+      // worker failed — fall back silently later
+      console.warn('Worker start failed', e);
+      workerRef.current = null;
     }
-  }
+  }, []);
 
-  function setOptions(p: Partial<Options>) {
-    if (typeof p.rateMs === 'number') optionsRef.current.rateMs = p.rateMs;
-    if (typeof p.batchSize === 'number') optionsRef.current.batchSize = p.batchSize;
-    if (typeof p.running === 'boolean') optionsRef.current.running = p.running;
-    // restart timer with new rate if running
-    if (optionsRef.current.running) {
-      if (timerRef.current != null) clearInterval(timerRef.current);
-      timerRef.current = window.setInterval(emitBatch, optionsRef.current.rateMs);
+  // internal: stop and terminate worker completely
+  const terminateWorker = useCallback(() => {
+    if (!workerRef.current) return;
+    try {
+      workerRef.current.postMessage({ type: 'stop' });
+      workerRef.current.terminate();
+    } catch (e) {}
+    workerRef.current = null;
+    stopRef.current = null;
+  }, []);
+
+  // start generator in main thread
+  const startMain = useCallback(() => {
+    if (stopRef.current) return;
+    stopRef.current = startGenerator((arr) => {
+      setSnapshot(arr);
+    }, { rateMs: optsRef.current.rateMs, batchSize: optsRef.current.batchSize });
+  }, []);
+
+  // stop main generator
+  const stopMain = useCallback(() => {
+    if (!stopRef.current) return;
+    try { stopRef.current(); } catch (e) {}
+    stopRef.current = null;
+  }, []);
+
+  // public start: choose worker or main
+  const start = useCallback(() => {
+    if (optsRef.current.useWorker) {
+      // ensure main is stopped
+      stopMain();
+      terminateWorker();
+      startWorker();
+      optsRef.current.running = true;
+      return;
     }
-  }
+    // main thread generator
+    terminateWorker();
+    startMain();
+    optsRef.current.running = true;
+  }, [startMain, startWorker, stopMain, terminateWorker]);
 
-  function running() {
-    return optionsRef.current.running;
-  }
+  const stop = useCallback(() => {
+    if (optsRef.current.useWorker) {
+      if (workerRef.current) workerRef.current.postMessage({ type: 'stop' });
+      stopRef.current = null;
+      optsRef.current.running = false;
+      return;
+    }
+    // main thread stop
+    stopMain();
+    optsRef.current.running = false;
+  }, [stopMain]);
 
-  // cleanup on unmount
+  // set options (applies to worker or main)
+  const setOptions = useCallback((o: { rateMs?: number; batchSize?: number; useWorker?: boolean }) => {
+    optsRef.current = { ...optsRef.current, ...o };
+    // if switching to worker mode
+    if (typeof o.useWorker === 'boolean' && o.useWorker !== !!workerRef.current) {
+      // if switching on, start worker; if switching off, terminate worker and start main if running
+      if (o.useWorker) {
+        // move to worker
+        stopMain();
+        terminateWorker();
+        startWorker();
+      } else {
+        // move to main
+        terminateWorker();
+        if (optsRef.current.running) startMain();
+      }
+    } else {
+      // same runtime: apply options to currently running generator
+      if (workerRef.current) {
+        workerRef.current.postMessage({ type: 'setOptions', rateMs: optsRef.current.rateMs, batchSize: optsRef.current.batchSize });
+      } else {
+        // restart main generator to pick options
+        const wasRunning = !!stopRef.current;
+        if (wasRunning) {
+          stopMain();
+          startMain();
+        }
+      }
+    }
+  }, [startMain, startWorker, stopMain, terminateWorker]);
+
   useEffect(() => {
-    if (optionsRef.current.running) start();
+    // initial choice
+    if (optsRef.current.useWorker) {
+      startWorker();
+    } else {
+      startMain();
+    }
     return () => {
-      if (timerRef.current != null) clearInterval(timerRef.current);
+      stopMain();
+      terminateWorker();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // optional public API to clear data
-  function clear() {
-    setData([]);
-  }
-
   return {
-    data,
-    controls: { start, stop, setOptions, running, getOptions: () => ({ ...optionsRef.current }), clear },
+    data: snapshot,
+    controls: {
+      start,
+      stop,
+      running: () => optsRef.current.running === true,
+      setOptions,
+      getOptions: () => ({ rateMs: optsRef.current.rateMs, batchSize: optsRef.current.batchSize, useWorker: optsRef.current.useWorker, running: optsRef.current.running }),
+    },
   };
 }
