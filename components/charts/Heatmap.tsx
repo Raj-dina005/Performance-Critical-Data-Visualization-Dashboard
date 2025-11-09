@@ -3,50 +3,117 @@
 import React, { useEffect, useRef } from 'react';
 import type { DataPoint } from '../../lib/types';
 
-type Props = { data: DataPoint[]; width?: number; height?: number; className?: string };
+type Props = {
+  data: DataPoint[];
+  width?: number;
+  height?: number;
+  cols?: number;
+  rows?: number;
+};
 
-function colorFor(v: number, min: number, max: number) {
-  const t = (v - min) / (max - min || 1);
-  const r = Math.round(255 * t);
-  const g = Math.round(80);
-  const b = Math.round(255 * (1 - t));
-  return `rgb(${r},${g},${b})`;
-}
+export default function Heatmap({
+  data,
+  width = 380,
+  height = 200,
+  cols = 40,
+  rows = 10,
+}: Props) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const dataRef = useRef<DataPoint[]>(data);
+  dataRef.current = data;
 
-export default function Heatmap({ data, width = 400, height = 200, className }: Props) {
-  const ref = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
-    const canvas = ref.current;
-    if (!canvas) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return; // guard: canvas not mounted
+
     const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const DPR = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-    canvas.width = Math.floor(width * DPR);
-    canvas.height = Math.floor(height * DPR);
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    if (!ctx) return; // guard: context unavailable
 
-    // map into a 20x10 grid
-    const cols = 40, rows = 20;
-    const grid = new Array(cols * rows).fill(0);
-    let min = Infinity, max = -Infinity;
-    for (const p of data) { if (p.v < min) min = p.v; if (p.v > max) max = p.v; }
-    const chunk = Math.max(1, Math.floor(data.length / (cols * rows)));
-    for (let i = 0; i < data.length; i += chunk) {
-      const idx = Math.floor((i / data.length) * (cols * rows));
-      grid[idx] += data[i].v;
-    }
-    const maxVal = Math.max(...grid, 1);
-    const cellW = width / cols, cellH = height / rows;
-    for (let y=0;y<rows;y++){
-      for (let x=0;x<cols;x++){
-        const v = grid[y * cols + x];
-        ctx.fillStyle = colorFor(v, 0, maxVal);
-        ctx.fillRect(x*cellW, y*cellH, cellW, cellH);
+    // DPR scaling
+    const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+    const clientW = canvas.clientWidth || width;
+    const clientH = canvas.clientHeight || height;
+    canvas.width = Math.max(1, Math.floor(clientW * dpr));
+    canvas.height = Math.max(1, Math.floor(clientH * dpr));
+    canvas.style.width = `${clientW}px`;
+    canvas.style.height = `${clientH}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    let mounted = true;
+
+    function draw() {
+      // ensure we still have canvas and ctx
+      const c = canvasRef.current;
+      if (!mounted || !c || !ctx) {
+        if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+        return;
       }
-    }
-  }, [data, width, height]);
 
-  return <canvas ref={ref} className={className} aria-label="Heatmap" />;
+      const pts = dataRef.current || [];
+      const w = c.clientWidth || width;
+      const h = c.clientHeight || height;
+      ctx.clearRect(0, 0, w, h);
+
+      if (!pts.length) {
+        rafRef.current = requestAnimationFrame(draw);
+        return;
+      }
+
+      // compute min/max
+      let min = Infinity, max = -Infinity;
+      for (const p of pts) {
+        const v = p.value;
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      if (min === max) { min -= 1; max += 1; }
+      const range = max - min || 1;
+
+      // aggregate into grid cells
+      const counts = new Array(cols * rows).fill(0);
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        // x slot by index, y slot by normalized value
+        const xSlot = Math.floor((i / Math.max(1, pts.length - 1)) * (cols - 1));
+        const ySlot = Math.floor(((p.value - min) / range) * (rows - 1));
+        const idx = ySlot * cols + xSlot;
+        counts[idx] = (counts[idx] || 0) + 1;
+      }
+
+      const maxCount = Math.max(...counts, 1);
+      const cellW = w / cols;
+      const cellH = h / rows;
+
+      for (let r = 0; r < rows; r++) {
+        for (let cIdx = 0; cIdx < cols; cIdx++) {
+          const idx = r * cols + cIdx;
+          const val = counts[idx] || 0;
+          const norm = val / maxCount;
+          // color ramp: transparent -> blue
+          const alpha = Math.min(1, Math.max(0, norm));
+          ctx.fillStyle = `rgba(59,130,246,${alpha})`;
+          ctx.fillRect(cIdx * cellW, h - (r + 1) * cellH, Math.max(0, cellW - 1), Math.max(0, cellH - 1));
+        }
+      }
+
+      rafRef.current = requestAnimationFrame(draw);
+    }
+
+    rafRef.current = requestAnimationFrame(draw);
+
+    return () => {
+      mounted = false;
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, [width, height, cols, rows]);
+
+  return (
+    <div style={{ width, height }}>
+      <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
+    </div>
+  );
 }
