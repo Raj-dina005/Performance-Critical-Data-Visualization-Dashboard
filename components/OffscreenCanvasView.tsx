@@ -1,102 +1,129 @@
 // components/OffscreenCanvasView.tsx
 'use client';
+
 import React, { useEffect, useRef } from 'react';
 
-type Props = {
-  id?: string;
+type OffscreenCanvasViewProps = {
   width?: number;
   height?: number;
   autoStart?: boolean;
 };
 
 export default function OffscreenCanvasView({
-  id = 'offscreen-canvas',
   width = 900,
-  height = 300,
+  height = 260,
   autoStart = true,
-}: Props) {
+}: OffscreenCanvasViewProps) {
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const workerRef = useRef<Worker | null>(null);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (typeof window === 'undefined') return;
 
-    if (!(canvas.transferControlToOffscreen && 'Worker' in window)) {
-      console.warn('OffscreenCanvas or Worker not supported — falling back to main-thread rendering.');
-      return;
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+
+    let canvas = canvasRef.current;
+    if (!canvas) {
+      canvas = document.createElement('canvas');
+      canvas.id = 'offscreen-canvas';
+      canvas.style.width = '100%';
+      canvas.style.height = `${height}px`;
+      canvas.style.display = 'block';
+      wrapper.appendChild(canvas);
+      canvasRef.current = canvas;
     }
 
-    if (workerRef.current) return; // already done for this instance
-
-    // try to remove dataset flag if present from dev hot reload
-    try { if ((canvas as any).dataset?._offscreenTransferred === 'true') delete (canvas as any).dataset._offscreenTransferred; } catch {}
-
-    let worker: Worker | null = null;
+    // clear any previous transfer flag if present
     try {
-      worker = new Worker('/offscreen-renderer.js');
-      workerRef.current = worker;
-    } catch (err) {
-      console.error('Failed to create worker:', err);
-      workerRef.current = null;
+      if ((canvas as any).dataset && (canvas as any).dataset._offscreenTransferred === 'true') {
+        delete (canvas as any).dataset._offscreenTransferred;
+      }
+    } catch {
+      // ignore
+    }
+
+    // TypeScript-safe feature checks
+    const canTransfer = typeof (canvas as any).transferControlToOffscreen === 'function';
+    const hasWorker = typeof Worker !== 'undefined';
+
+    if (!canTransfer || !hasWorker) {
+      console.warn('OffscreenCanvas or Worker not supported in this environment. Using main-thread canvas fallback.');
       return;
     }
 
-    // transfer canvas to offscreen (guarded)
     try {
       const offscreen = (canvas as any).transferControlToOffscreen();
-      offscreen.width = width;
-      offscreen.height = height;
-      try { (canvas as any).dataset._offscreenTransferred = 'true'; } catch {}
-      worker.postMessage({ type: 'init', canvas: offscreen, width, height }, [offscreen]);
-    } catch (err) {
-      console.warn('transferControlToOffscreen failed:', err);
-      try { workerRef.current?.terminate(); } catch {}
-      workerRef.current = null;
-      return;
-    }
+      if ((canvas as any).dataset) (canvas as any).dataset._offscreenTransferred = 'true';
 
-    // listen for worker "inited" -> then expose helper and optionally start
-    const onWorkerMsg = (ev: MessageEvent) => {
-      try {
-        const m = ev.data || {};
-        if (m && m.type === 'inited') {
-          // worker is initialized — expose the helper
-          (window as any).offscreenWorkerSend = (msg: any) => {
-            try { workerRef.current?.postMessage(msg); } catch (e) {}
-          };
-          // optionally auto-start
-          if (autoStart) {
-            try { workerRef.current?.postMessage({ type: 'start' }); } catch {}
-          }
-        } else if (m && m.type === 'pong') {
-          // could set a UI flag or console log
-          // console.log('offscreen worker pong');
+      // ensure worker file exists at /offscreen-renderer.js in public/
+      const w = new Worker('/offscreen-renderer.js', { type: 'module' });
+      workerRef.current = w;
+
+      w.postMessage({ type: 'init', width: canvas.clientWidth || width, height: canvas.clientHeight || height }, [offscreen]);
+
+      if (autoStart) w.postMessage({ type: 'start' });
+
+      (window as any).offscreenWorkerSend = (msg: any) => {
+        try {
+          w.postMessage(msg);
+        } catch (err) {
+          console.warn('offscreenWorkerSend failed:', err);
         }
-      } catch (e) {}
-    };
-    workerRef.current.onmessage = onWorkerMsg;
-    workerRef.current.onerror = (ev: ErrorEvent) => console.error('worker error', ev.message || ev);
+      };
 
-    function handleResize() {
-      const w = canvas.clientWidth || width;
-      const h = canvas.clientHeight || height;
-      try { workerRef.current?.postMessage({ type: 'resize', width: Math.round(w), height: Math.round(h) }); } catch {}
+      w.onmessage = (e: MessageEvent) => {
+        // debug: console.log('[offscreen worker]', e.data);
+      };
+
+      w.onerror = (ev) => {
+        console.error('Offscreen worker error:', ev);
+      };
+    } catch (err) {
+      console.error('Failed to initialize offscreen worker:', err);
+      if (workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
     }
-    window.addEventListener('resize', handleResize);
 
     return () => {
-      window.removeEventListener('resize', handleResize);
       try {
-        // only clear global if it points to this instance (best-effort)
-        if ((window as any).offscreenWorkerSend) (window as any).offscreenWorkerSend = undefined;
-      } catch {}
-      try { workerRef.current?.postMessage({ type: 'stop' }); } catch {}
-      try { workerRef.current?.terminate(); } catch {}
-      workerRef.current = null;
+        if (workerRef.current) {
+          workerRef.current.terminate();
+          workerRef.current = null;
+        }
+        if ((window as any).offscreenWorkerSend) {
+          try {
+            delete (window as any).offscreenWorkerSend;
+          } catch {
+            (window as any).offscreenWorkerSend = undefined;
+          }
+        }
+        if (canvasRef.current && (canvasRef.current as any).dataset) {
+          try {
+            delete (canvasRef.current as any).dataset._offscreenTransferred;
+          } catch {}
+        }
+        if (canvasRef.current && wrapper.contains(canvasRef.current)) {
+          wrapper.removeChild(canvasRef.current);
+          canvasRef.current = null;
+        }
+      } catch (cleanupErr) {
+        console.warn('OffscreenCanvas cleanup error:', cleanupErr);
+      }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [width, height, autoStart]);
+  }, [height, width, autoStart]);
 
-  return <canvas ref={canvasRef} id={id} style={{ width: '100%', height: `${height}px`, display: 'block' }} />;
+  return (
+    <div
+      ref={wrapperRef}
+      style={{
+        width: '100%',
+        minHeight: `${height}px`,
+        display: 'block',
+      }}
+    />
+  );
 }
