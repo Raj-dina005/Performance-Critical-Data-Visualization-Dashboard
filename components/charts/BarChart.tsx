@@ -5,17 +5,23 @@ import type { DataPoint } from '../../lib/types';
 
 type Props = { data: DataPoint[]; width?: number; height?: number; className?: string };
 
-export default function BarChart({ data, width = 380, height = 200, className }: Props) {
+export default function BarChart({ data, width = 400, height = 200, className }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
-    const canvas = canvasRef.current; if (!canvas) return;
-    const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
     const DPR = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-    canvas.width = Math.floor(width * DPR); canvas.height = Math.floor(height * DPR);
-    canvas.style.width = `${width}px`; canvas.style.height = `${height}px`;
-    ctx.setTransform(DPR,0,0,DPR,0,0);
+    canvas.width = Math.floor(width * DPR);
+    canvas.height = Math.floor(height * DPR);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 
-    const bins = 50; const counts = new Array(bins).fill(0);
+    // simple aggregation into 50 bins
+    const bins = 50;
+    const counts = new Array(bins).fill(0);
     let min = Infinity, max = -Infinity;
     for (const p of data) { if (p.v < min) min = p.v; if (p.v > max) max = p.v; }
     const range = (max - min) || 1;
